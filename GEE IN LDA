@@ -1,0 +1,120 @@
+#required libraries
+library(tidyverse)
+library(dplyr)
+library(wgeesel) 
+library(glmtoolbox) 
+library(missMethods)
+library(knitr)
+library(tidyr)
+
+options(nwarnings = 1000000)
+
+generate_results <- function(seed, corstr,rho, n, each) {
+  set.seed(seed)
+  num_simulations <- 1000  ## this can be modified depending on the preferred number of replications
+  
+  results <- vector("list", num_simulations)
+  successful_simulations <- 0
+  
+  
+  for (i in 1:num_simulations){
+    n=n
+    id=rep(1:n,each=each) ##
+    n_total <- n*each
+    rho=rho 
+    phi=1
+    x=cbind(1,runif(length(id)))
+    beta=c(0.5,0.5)
+    x_mis=cbind(0,rnorm(length(id)))
+    para=c(0)
+    com.data <- data_sim(id=rep(1:n,each=each),rho=rho,phi=1,x=cbind(1,runif(length(id))),
+                         beta=c(0.5,0.5),x_mis=cbind(0,rnorm(length(id))),para,corstr = corstr,
+                         family = "binary",lag_level = 1)
+    mnar_values <- delete_MNAR_censoring(com.data$data, p=0.15, cols_mis = c(6) )
+    case1 <- select(mnar_values, id, response, '2')
+    id <- com.data$id
+    response <- factor(com.data$response)
+    '2' <- as.numeric(case1$'2')
+  
+    model <- response ~ case1$'2'
+    
+    if(corstr == "independence") {
+      Ri <- glmgee(model, id = id, data = case1, family = binomial, corstr = "independence")
+    } else if(corstr == "exchangeable") {
+      Ri <- glmgee(model, id = id, data = case1, family = binomial, corstr = "exchangeable")
+    } else if(corstr == "ar1") {
+      Ri <- glmgee(model, id = id, data = case1, family = binomial, corstr = "AR-M", Mv=1)
+    }
+    
+    summary(Ri)
+    
+    ## to extract estimates
+    
+    beta_o <- coef(Ri)[1] ##estimate of intercept
+    beta_1 <- coef(Ri)[2] ## estimate of "2"
+    
+    standard_errors <- sqrt(diag(vcov(Ri)))
+    beta_o_rse <- standard_errors[1] ## rse of intercept
+    beta_1_rse <- standard_errors[2] ## rse of "2"
+    
+    
+    ## extracting p-value
+    null <- 0
+    z_stat_betao <- (beta_o - null)/beta_o_rse
+    p_value_betao <- 2*(1-pnorm(abs(z_stat_betao))) ## p-value for intercept 
+    
+    
+    z_stat_beta1 <- (beta_1 - null)/beta_1_rse
+    p_value_beta1 <- 2*(1-pnorm(abs(z_stat_beta1)))
+    
+    fit11 <- glmgee(model, id = id, data = case1, family = binomial) ## assumes independence
+    fit12 <- update(fit11, corstr="Exchangeable")
+    fit13 <- update(fit11, corstr="AR-M", MV=1) 
+    
+    cic <- CIC(fit11, fit12, fit13)
+    min_cic <- which.min(cic$CIC)
+    corr_cic <- cic$Correlation[min_cic]
+    
+    qic <- QIC(fit11, fit12, fit13)
+    min_qic <- which.min(qic$QIC)
+    corr_qic <- qic$Correlation[min_qic]
+    
+    rjc <- RJC(fit11, fit12, fit13)
+    min_rjc <- which.min(rjc$RJC)
+    corr_rjc <- rjc$Correlation[min_rjc]
+    
+    pac <- PAC(fit11, fit12, fit13)
+    min_pac <- which.min(pac$PAC)
+    corr_pac <- pac$Correlation[min_pac]
+    
+    gpc <- AGPC(fit11, fit12, fit13, k = 0)
+    max_gpc <- which.max(gpc$AGPC)
+    corr_gpc <- gpc$Correlation[max_gpc]
+    
+    min.gpc <- AGPC(fit11, fit12, fit13, k = 0) #setting k = 0 to reduce to GP
+    min.gpc <- which.min(min.gpc$AGPC)
+    corr_gpcmin <- gpc$Correlation[min.gpc]
+    
+    sgpc <- SGPC(fit11, fit12, fit13)
+    min_sgpc <- which.min(sgpc$SGPC)
+    corr_sgpc <- sgpc$Correlation[min_sgpc]
+    
+    agpc <- AGPC(fit11, fit12, fit13) #computes for agpc
+    min_agpc <- which.min(agpc$AGPC)
+    corr_agpc <- agpc$Correlation[min_agpc]
+    
+    successful_simulations <- successful_simulations + 1
+    
+    results[[i]] <- list(corr_cic = corr_cic, corr_qic = corr_qic, corr_rjc = corr_rjc,
+                         corr_pac = corr_pac, corr_gpc = corr_gpc,
+                         corr_agpc = corr_agpc,corr_gpcmin = corr_gpcmin,
+                         corr_sgpc = corr_sgpc, beta_o = beta_o, 
+                         beta_1 = beta_1, beta_o_rse = beta_o_rse, beta_1_rse = beta_1_rse,
+                         p_value_betao = p_value_betao, p_value_beta1 = p_value_beta1)
+    
+    
+    
+    
+  }
+  return(results)
+}
